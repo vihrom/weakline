@@ -4,7 +4,7 @@
 
 Designed for developers who value minimal latency, clean aesthetics, and instant terminal feedback.
 
-![Screenshot](screenshot)
+![Screenshot](screenshot.jpg)
 
 ## Features
 
