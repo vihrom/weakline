@@ -147,7 +147,7 @@ func Render(cfg config.Config, exitCode int) string {
 	if exitCode != 0 {
 		arrowColor = cfg.Colors.PromptErr
 	}
-	line2 := color(arrowColor, "❯")
+	line2 := color(arrowColor, cfg.IconPrompt)
 
 	line1 := fmt.Sprintf("%s%s%s", folderSegment, venvSegment, gitSegment)
 

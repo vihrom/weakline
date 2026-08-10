@@ -19,6 +19,7 @@ type Colors struct {
 
 type Config struct {
 	Timeout       time.Duration
+	IconPrompt    string
 	IconFolder    string
 	IconGitBranch string
 	IconStaged    string
@@ -32,6 +33,7 @@ type Config struct {
 
 var Default = Config{
 	Timeout:       250 * time.Millisecond,
+	IconPrompt:    "❯",
 	IconFolder:    "",
 	IconGitBranch: "\ue702 ",
 	IconStaged:    "+",
