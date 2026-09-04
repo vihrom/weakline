@@ -57,7 +57,8 @@ func parse256(val string) (string, bool) {
 	return "", false
 }
 
-// Map converts color names, HEX codes, 256-IDs, or raw ANSI strings into final ANSI escape codes.
+// Map evaluates configuration string values and normalizes them into standard ANSI color definitions.
+// It seamlessly supports True Color (HEX), 8-bit (256-color palette), named presets, or raw terminal codes.
 func Map(val string) string {
 	val = strings.TrimSpace(val)
 

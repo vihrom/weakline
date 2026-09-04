@@ -26,46 +26,49 @@ func shortenHome(dir string) string {
 }
 
 // formatPath colors the parent directories and active directory separately.
+// Optimized version to minimize memory allocations and slicing overhead.
 func formatPath(cfg config.Config, displayPath string) string {
 	if displayPath == "~" || displayPath == "/" {
 		return color(cfg.Colors.PathActive, displayPath)
 	}
 
-	parts := strings.Split(displayPath, "/")
-	var parentParts []string
-
-	for i, part := range parts {
-		if part == "" {
-			continue
-		}
-
-		if i == len(parts)-1 {
-			parentSlash := color(cfg.Colors.PathParent, "/")
-			parentsFormatted := strings.Join(parentParts, parentSlash)
-
-			if strings.HasPrefix(displayPath, "/") {
-				parentsFormatted = parentSlash + parentsFormatted
-			}
-
-			if len(parentParts) > 0 {
-				activeSegment := color(cfg.Colors.PathActive, "/"+part)
-				return parentsFormatted + activeSegment
-			}
-
-			return color(cfg.Colors.PathActive, part)
-		}
-
-		parentParts = append(parentParts, color(cfg.Colors.PathParent, part))
+	idx := strings.LastIndex(displayPath, "/")
+	if idx == -1 {
+		return color(cfg.Colors.PathActive, displayPath)
 	}
 
-	return color(cfg.Colors.PathActive, displayPath)
+	// Safely split into parents and the final active directory segment
+	parents := displayPath[:idx]
+	active := displayPath[idx:] // Includes the leading slash, e.g., "/kubernetes"
+
+	// Exceptional case for root paths like "/etc"
+	if parents == "" {
+		parents = "/"
+		active = displayPath[1:]
+	}
+
+	// Colorize paths using Zsh color delimiters
+	formattedParents := color(cfg.Colors.PathParent, parents)
+	formattedActive := color(cfg.Colors.PathActive, active)
+
+	return formattedParents + formattedActive
 }
 
-// getCacheFilePath returns a unique temporary file path for the current working directory.
+// getCacheFilePath returns a secure, unique temporary file path for the current directory.
+// Fixes security flaw by isolating files inside a private user-owned directory.
 func getCacheFilePath() string {
 	pwd, _ := os.Getwd()
+
+	// Create a user-specific subdirectory inside tmp (e.g., /tmp/weakline-1000)
+	uid := os.Getuid()
+	userTmpDir := filepath.Join(os.TempDir(), fmt.Sprintf("weakline-%d", uid))
+
+	// Ensure directory exists with strict permissions: owner can rwx, others nothing (0700)
+	_ = os.MkdirAll(userTmpDir, 0700)
+
+	// Hash-friendly string escaping for the current working directory path
 	safeName := strings.ReplaceAll(pwd, "/", "_")
-	return filepath.Join(os.TempDir(), fmt.Sprintf("weakline_async%s", safeName))
+	return filepath.Join(userTmpDir, fmt.Sprintf("async%s", safeName))
 }
 
 // buildGitStatusString formats individual status indicators into a single styled string.
@@ -110,7 +113,8 @@ func WriteAsyncCache(cfg config.Config, st git.Status) bool {
 		return false
 	}
 
-	_ = os.WriteFile(cachePath, []byte(newResult), 0o644)
+	// Writing file securely inside the owner-only directory
+	_ = os.WriteFile(cachePath, []byte(newResult), 0o600)
 	return true
 }
 

@@ -1,8 +1,9 @@
-// Package config defines default icons, colors, and styling settings for the prompt.
+// Package config defines structures and defaults for icons, colors, and global behavioral settings.
 package config
 
 import "time"
 
+// Colors encapsulates the ANSI code color mapping for every semantic element of the prompt.
 type Colors struct {
 	PathParent string
 	PathActive string
@@ -17,6 +18,7 @@ type Colors struct {
 	PromptErr  string
 }
 
+// Config centralizes the functional parameters, glyph representations, and theme colors.
 type Config struct {
 	Timeout       time.Duration
 	IconPrompt    string
