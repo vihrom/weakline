@@ -58,7 +58,9 @@ func handleAsync(cfg config.Config) bool {
 	}
 
 	lockPath := getLockPath(targetPID)
-	file, err := os.OpenFile(lockPath, os.O_RDWR, 0600)
+
+	// FIX: Added os.O_CREATE flag to prevent failure if the lockfile was deleted from tmp
+	file, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0600)
 	if err == nil {
 		defer file.Close()
 		// Try to hold the lock during execution. Abort if a previous worker is still processing.
@@ -102,16 +104,17 @@ func spawnAsyncProcess(pid int) {
 	if err != nil {
 		return
 	}
-	defer file.Close()
 
 	// Perform a non-blocking test lock to see if a background thread is already active
 	err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	if err != nil {
+		file.Close()
 		return
 	}
 
 	exe, err := os.Executable()
 	if err != nil {
+		file.Close()
 		return
 	}
 
@@ -119,6 +122,9 @@ func spawnAsyncProcess(pid int) {
 	cmd := exec.Command(exe, "--async", strconv.Itoa(pid))
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	_ = cmd.Start()
+
+	// This prevents descriptor leakage and ensures the child doesn't lock its own parent context.
+	file.Close()
 }
 
 func main() {
