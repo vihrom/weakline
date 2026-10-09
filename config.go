@@ -3,6 +3,11 @@ package main
 import "time"
 
 // Colors encapsulates the ANSI code color mapping for every semantic element of the prompt.
+// Supported color representation formats via Map():
+// 1. Plain text names: "red", "cyan", "gray", etc.
+// 2. Bold/Styled text names: "bold_red", "bold_cyan", "underline", "dim", etc.
+// 3. HEX / TrueColor (24-bit): "#babdbf", "#FF0055", "RRGGBB"
+// 4. ANSI 256-color palette index: "196", "208", "39"
 type Colors struct {
 	PathParent string
 	PathActive string
