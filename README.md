@@ -1,59 +1,47 @@
-#  weakline
+# weakline
 
-**weakline** is a blazingly fast, lightweight, and modern Zsh prompt written in Go. 
+A minimal, asynchronous Zsh prompt in Go. Fast enough, clean, and zero framework dependency.
 
-Designed for developers who value minimal latency, clean aesthetics, and instant terminal feedback.
+> **Why weak?**
+> It's written in Go - bringing a full Garbage Collector just to render two lines of text. It's not zero-allocation, nor the absolute limit of modern prompt engineering. But it runs background tasks via OS `flock`, caches reliably, and gets out of your way.
 
 ![Screenshot](screenshot.jpg)
 
 ## Features
 
-*  **Zero Lag:** Asynchronous Git status rendering to keep your terminal ultra-responsive.
-*  **Clean Path Highlighting:** Distinct, readable colors for parent directories and your active folder.
-*  **Environment Aware:** Seamlessly displays active Python virtual environments.
-*  **Single Binary:** No heavy dependencies, complex shell frameworks, or bloated configs.
+- **Async Git:** Offloads `git status` to a background worker with `flock` and `SIGUSR1` signals.
+- **Fast Enough:** Simple Go buffer formatting, low memory overhead.
+- **Color Support:** Named ANSI, TrueColor HEX (`#RRGGBB`), and 256-color codes.
+- **Self-Contained:** Single static binary. No Node, Python, or Zsh plugin managers.
+
+## Trade-offs
+
+- **Go Runtime:** Spawns a full Go runtime on execution. Use Rust/C if sub-microsecond cold starts are critical.
+- **Zsh Only:** Relies on Zsh-specific prompt hooks and `TRAPUSR1`.
+
+## Comparisons
+
+* **vs Pure:** Keeps the clean layout, but adds granular Git indicators (staged, unstaged, ahead/behind) out of the box.
+* **vs Powerlevel10k:** Strips away dozens of unused segments and massive `.p10k.zsh` configs in favor of a single binary.
+
+## Configuration
+
+Weakline relies on compile-time configuration (`config.go`). You tweak icons, timeouts, and colors directly in the code structure before building.
+
+Since the configuration is compiled into a single static binary, you can easily copy your executable across machines without carrying around external config files or dotfiles ecosystems.
 
 ## Installation
 
-1. Clone and build the binary
-   ```bash
-   git clone https://github.com/vihrom/weakline
-   cd weakline
-   go build -o ~/.local/bin/weakline main.go
-   ```
+Build the binary:
+```bash
+make
+```
+Or install it directly to your path (e.g. `~/.local/bin`):
+```bash
+make install
+```
+Add initialization to `~/.zshrc`:
+```bash
+eval "$(weakline init zsh)"
+```
 
-2. Add this line to the end of your ~/.zshrc:
-   ```bash
-   eval "$(weakline init zsh)"
-   ```
-
-## Why Weakline? (vs Pure & Powerlevel10k)
-
-There are already fantastic prompt engines in the Zsh ecosystem, most notably Pure and Powerlevel10k. However, Weakline was built to find the sweet spot between ultimate minimalism and rich Git diagnostics.
-
-### Pure
-
-Pure is the gold standard of minimal prompts - clean, elegant, and unobtrusive. However, its minimalism comes at the cost of Git visibility:
-
-* It lacks granular Git indicators (staged, unstaged, untracked, ahead/behind counters) out of the box.
-
-* When working in complex repositories or fast-paced workflows, you often have to manually run git status to see what’s actually happening.
-
-*Weakline keeps Pure's clean aesthetic and lightweight feel, but gives you full, high-density Git insight at a glance.*
-
-### Powerlevel10k
-
-Powerlevel10k is an incredible engineering marvel - insanely fast, feature-rich, and infinitely configurable. But for many workflows, it’s simply over-engineered:
-
-* Feature Bloat: Hundreds of segments (battery, Kubernetes, AWS, RAM, system load) that most developers never use.
-
-* Configuration Overhead: Thousands of lines in .p10k.zsh, making custom tweaks tedious and brittle.
-
-* Heavy Footprint: A massive codebase for a utility whose primary job is just to render a couple of lines in a terminal.
-
-*Weakline cuts out the noise. No bloated configurations, no unnecessary segments. Just a single, fast Go binary providing directory context, Python venv status, and rich Git info.*
-
-### Summary
-Pure is beautiful, but lacks detailed Git context.
-Powerlevel10k is powerful, but overly complex and heavy.
-Weakline gives you detailed Git status, zero-lag async performance, and absolute simplicity.
