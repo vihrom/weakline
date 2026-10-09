@@ -41,6 +41,17 @@ func TestParseBranchLine(t *testing.T) {
 			expAhead:  1,
 			expBehind: 2,
 		},
+		{
+			name:      "Upstream gone with closing bracket",
+			line:      "## dev...origin/dev [ahead 4] (gone)",
+			expBranch: "dev",
+			expAhead:  4,
+		},
+		{
+			name:      "No commits yet on fresh branch",
+			line:      "## No commits yet on init-branch",
+			expBranch: "init-branch",
+		},
 	}
 
 	for _, tt := range tests {
