@@ -1,4 +1,6 @@
-include config.mk
+BINARY_NAME = weakline
+INSTALL_DIR = $(HOME)/.local/bin
+LDFLAGS = -ldflags="-s -w"
 
 all: build
 
@@ -9,15 +11,11 @@ bench:
 	go test -bench=. -benchmem ./...
 
 build:
-	mkdir -p ${BUILD_DIR}
-	go build ${LDFLAGS} -o ${BUILD_DIR}/${BINARY_NAME} .
-
-clean:
-	rm -rf ${BUILD_DIR}
+	go build ${LDFLAGS} -o ${BINARY_NAME} .
 
 install: all
 	mkdir -p ${DESTDIR}${INSTALL_DIR}
-	cp -f ${BUILD_DIR}/${BINARY_NAME} ${DESTDIR}${INSTALL_DIR}
+	cp -f ${BINARY_NAME} ${DESTDIR}${INSTALL_DIR}
 	chmod 755 ${DESTDIR}${INSTALL_DIR}/${BINARY_NAME}
 
 uninstall:
