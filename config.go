@@ -37,8 +37,8 @@ type Config struct {
 	Colors        Colors
 }
 
-	Timeout:       250 * time.Millisecond,
 var DefaultConfig = Config{
+	Timeout:       500 * time.Millisecond,
 	IconPrompt:    "$",
 	IconFolder:    "",
 	IconGitBranch: "\ue702 ",
