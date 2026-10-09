@@ -17,13 +17,15 @@ type Status struct {
 	Ahead     int
 	Behind    int
 	IsGit     bool
+	IsTimeout bool
+	Err       error
 }
 
-// parseAheadBehind parses the ahead/behind token, e.g., "ahead 1, behind 2]" or "ahead 1]".
+// parseAheadBehind parses the ahead/behind token, e.g., "ahead 1, behind 2] (gone)" or "ahead 1]".
 func parseAheadBehind(token []byte, st *Status) {
-	// Trim the trailing bracket if present
-	if len(token) > 0 && token[len(token)-1] == ']' {
-		token = token[:len(token)-1]
+	// Cut trailing metadata at the closing bracket
+	if idxClose := bytes.IndexByte(token, ']'); idxClose != -1 {
+		token = token[:idxClose]
 	}
 
 	// Split multiple metrics by comma (e.g., "ahead 1" and "behind 2")
@@ -42,14 +44,24 @@ func parseAheadBehind(token []byte, st *Status) {
 // parseBranchLine extracts the branch name and ahead/behind counters from the header line.
 // Example formats:
 // "## main...origin/main [ahead 1, behind 2]"
-// "## initial...origin/initial [behind 4]"
+// "## No commits yet on main"
 // "## master"
 func parseBranchLine(line []byte, st *Status) {
-	if len(line) < 3 {
+	if !bytes.HasPrefix(line, []byte("## ")) {
 		return
 	}
-	// Skip the leading "## "
+	// Skip leading "## "
 	line = line[3:]
+
+	// Handle initial repository states before first commit
+	if bytes.HasPrefix(line, []byte("No commits yet on ")) {
+		st.Branch = string(line[18:])
+		return
+	}
+	if bytes.HasPrefix(line, []byte("Initial commit on ")) {
+		st.Branch = string(line[18:])
+		return
+	}
 
 	// Check if there are ahead/behind tracking metrics
 	idxBracket := bytes.IndexByte(line, '[')
@@ -69,18 +81,30 @@ func parseBranchLine(line []byte, st *Status) {
 }
 
 // GetStatus orchestrates repository metadata parsing bound by a global configuration timeout.
-// CRITICAL OPTIMIZATION: Executes a single 'git status' process to retrieve both file status
-// and tracking distance simultaneously, cutting execution overhead strictly in half.
 func GetStatus(timeout time.Duration) Status {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Use --branch to fetch tracking distance and current branch in a single process fork.
-	// Use --no-optional-locks to prevent lock file collisions in the background.
 	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "status", "--porcelain=v1", "--branch", "-unormal")
+
 	out, err := cmd.Output()
+
 	if err != nil {
-		return Status{IsGit: false}
+		// Anti-flicker guard: if Git execution exceeds the timeout deadline,
+		// mark IsTimeout = true so WriteAsyncCache can safely abort without
+		// wiping the existing cache or triggering false prompt redraws.
+		if ctx.Err() == context.DeadlineExceeded {
+			return Status{
+				IsGit:     true,
+				IsTimeout: true,
+				Err:       ctx.Err(),
+			}
+		}
+		// Non-git directory or execution failure (e.g., git not installed, bad flags)
+		return Status{
+			IsGit: false,
+			Err:   err,
+		}
 	}
 
 	st := Status{IsGit: true}
@@ -123,6 +147,14 @@ func GetStatus(timeout time.Duration) Status {
 			st.Untracked++
 			continue
 		}
+
+		// Handle merge conflict states explicitly to prevent duplicate count
+		if (x == 'D' && y == 'D') || (x == 'A' && y == 'U') || (x == 'U' && y == 'D') ||
+			(x == 'U' && y == 'A') || (x == 'D' && y == 'U') || (x == 'A' && y == 'A') || (x == 'U' && y == 'U') {
+			st.Unstaged++
+			continue
+		}
+
 		if x != ' ' && x != '?' {
 			st.Staged++
 		}
