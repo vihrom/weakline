@@ -7,8 +7,7 @@ import (
 	"strings"
 )
 
-// writeColored writes text wrapped in ANSI escape codes and Zsh escape sequences
-// directly to the strings.Builder. This bypasses costly fmt.Sprintf allocations.
+// writeColored writes text wrapped in ANSI escape codes and Zsh escape sequences directly to the strings.Builder.
 func writeColored(sb *strings.Builder, ansiCode string, text string) {
 	if text == "" {
 		return
@@ -23,8 +22,10 @@ func writeColored(sb *strings.Builder, ansiCode string, text string) {
 // shortenHome replaces the leading home directory path with a tilde (~).
 func shortenHome(dir string) string {
 	home := os.Getenv("HOME")
-	if trimmed, found := strings.CutPrefix(dir, home); found {
-		return "~" + trimmed
+	if home != "" {
+		if trimmed, found := strings.CutPrefix(dir, home); found {
+			return "~" + trimmed
+		}
 	}
 	return dir
 }
@@ -47,17 +48,16 @@ func writeFormattedPath(sb *strings.Builder, cfg Config, displayPath string) {
 
 	if parents == "" {
 		parents = "/"
-		active = displayPath[1:]
+		active = displayPath[1:] // Anti-double slash guard for root-level folders (e.g. /usr)
 	}
 
 	writeColored(sb, cfg.Colors.PathParent, parents)
 	writeColored(sb, cfg.Colors.PathActive, active)
 }
 
-
 // buildGitStatusString formats individual status indicators into a single styled string.
 func buildGitStatusString(cfg Config, st Status) string {
-	if !st.IsGit {
+	if !st.IsGit || st.IsTimeout || st.Err != nil {
 		return ""
 	}
 
@@ -65,7 +65,6 @@ func buildGitStatusString(cfg Config, st Status) string {
 	sb.Grow(128)
 
 	sb.WriteString(" ")
-
 	sb.WriteString("%{\x1b[")
 	sb.WriteString(cfg.Colors.Branch)
 	sb.WriteString("m%}")
@@ -100,7 +99,6 @@ func buildGitStatusString(cfg Config, st Status) string {
 
 		res := strconv.AppendInt(buf[:0], int64(s.count), 10)
 		sb.Write(res)
-
 		sb.WriteString("%{\x1b[0m%}")
 	}
 
@@ -128,8 +126,8 @@ func writeVenv(sb *strings.Builder, cfg Config) {
 
 // Render builds and returns the complete two-line terminal prompt using a single strings.Builder.
 func Render(cfg Config, exitCode int) string {
-	dir, _ := os.Getwd()
-	displayPath := shortenHome(dir)
+	pwd, _ := os.Getwd()
+	displayPath := shortenHome(pwd)
 
 	var sb strings.Builder
 	sb.Grow(512)
@@ -140,7 +138,7 @@ func Render(cfg Config, exitCode int) string {
 	writeFormattedPath(&sb, cfg, displayPath)
 	writeVenv(&sb, cfg)
 
-	if cacheData, err := os.ReadFile(getCacheFilePath()); err == nil {
+	if cacheData, err := os.ReadFile(getCacheFilePath(pwd)); err == nil {
 		sb.Write(cacheData)
 	}
 
