@@ -133,7 +133,7 @@ func main() {
 		return
 	}
 
-	cfg := Default
+	cfg := DefaultConfig
 
 	if handleAsync(cfg) {
 		return

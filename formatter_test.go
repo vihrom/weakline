@@ -6,7 +6,7 @@ import (
 )
 
 func TestBuildGitStatusString(t *testing.T) {
-	cfg := Default
+	cfg := DefaultConfig
 	st := Status{
 		IsGit:     true,
 		Branch:    "main",
@@ -30,7 +30,7 @@ func TestBuildGitStatusString(t *testing.T) {
 
 // BenchmarkRender measures the performance and allocations of the complete prompt rendering.
 func BenchmarkRender(b *testing.B) {
-	cfg := Default
+	cfg := DefaultConfig
 	exitCode := 0
 
 	b.ResetTimer()
