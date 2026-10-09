@@ -5,13 +5,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
-)
-
-// Global sync block to ensure the cache directory is created exactly once per process lifetime.
-var (
-	mkdirOnce  sync.Once
-	userTmpDir string
 )
 
 // writeColored writes text wrapped in ANSI escape codes and Zsh escape sequences
@@ -61,28 +54,6 @@ func writeFormattedPath(sb *strings.Builder, cfg Config, displayPath string) {
 	writeColored(sb, cfg.Colors.PathActive, active)
 }
 
-// getCacheFilePath returns a secure, unique temporary file path for the current directory.
-// Heavily optimized using sync.Once to completely eliminate redundant disk I/O on every invocation.
-func getCacheFilePath() string {
-	pwd, _ := os.Getwd()
-
-	// Ensure the base directory structure is initialized exactly once, avoiding multi-alloc disk hits.
-	mkdirOnce.Do(func() {
-		uid := os.Getuid()
-		userTmpDir = filepath.Join(os.TempDir(), "weakline-"+strconv.Itoa(uid))
-		_ = os.MkdirAll(userTmpDir, 0700)
-	})
-
-	// Avoid strings.ReplaceAll allocation if the path contains no slashes
-	var safeName string
-	if strings.Contains(pwd, "/") {
-		safeName = strings.ReplaceAll(pwd, "/", "_")
-	} else {
-		safeName = pwd
-	}
-
-	return filepath.Join(userTmpDir, "async"+safeName)
-}
 
 // buildGitStatusString formats individual status indicators into a single styled string.
 func buildGitStatusString(cfg Config, st Status) string {
@@ -134,20 +105,6 @@ func buildGitStatusString(cfg Config, st Status) string {
 	}
 
 	return sb.String()
-}
-
-// WriteAsyncCache evaluates and saves formatted Git status to a temp file.
-func WriteAsyncCache(cfg Config, st Status) bool {
-	cachePath := getCacheFilePath()
-	newResult := buildGitStatusString(cfg, st)
-
-	oldData, _ := os.ReadFile(cachePath)
-	if string(oldData) == newResult {
-		return false
-	}
-
-	_ = os.WriteFile(cachePath, []byte(newResult), 0o600)
-	return true
 }
 
 // writeVenv writes a formatted Python virtual environment segment directly to the builder.
