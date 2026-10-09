@@ -9,28 +9,6 @@ import (
 	"syscall"
 )
 
-// zshInitScript injects configuration hooks into the active shell environment.
-// PROMPT_SUBST enables dynamic function evaluation inside the prompt string.
-// TRAPUSR1 intercepts signals from background tasks to immediately refresh the visual grid.
-const zshInitScript = `
-setopt PROMPT_SUBST
-
-TRAPUSR1() {
-    zle && zle reset-prompt
-}
-
-PROMPT='$(weakline $$ $?)'
-`
-
-// handleInit prints shell integration code if requested.
-func handleInit() bool {
-	if len(os.Args) > 2 && os.Args[1] == "init" && os.Args[2] == "zsh" {
-		fmt.Print(zshInitScript)
-		return true
-	}
-	return false
-}
-
 // getLockPath returns a secure lockfile path isolated inside the user's private directory.
 // Optimized to utilize strconv.Itoa, eliminating costly fmt.Sprintf allocations.
 func getLockPath(pid int) string {
