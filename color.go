@@ -1,7 +1,8 @@
+//go:build darwin || linux || freebsd || openbsd || netbsd
+
 package main
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 )
@@ -79,31 +80,48 @@ var namedColors = map[string]string{
 	"bg_bright_white":   "107",
 }
 
-// isHex checks if a string consists entirely of valid hexadecimal characters.
-func isHex(s string) bool {
-	_, err := strconv.ParseUint(s, 16, 64)
-	return err == nil
+// isSGR reports whether val is a non-empty list of decimal numbers separated by ';'.
+func isSGR(val string) bool {
+	if val == "" {
+		return false
+	}
+	for i := 0; i < len(val); i++ {
+		char := val[i]
+		if (char < '0' || char > '9') && char != ';' {
+			return false
+		}
+	}
+	return true
 }
 
-// parseHex converts a HEX string (#RRGGBB or RRGGBB) into a True Color ANSI sequence.
+// parseHex converts "#RRGGBB", "RRGGBB" or the shorthand "#RGB" into a True Color ANSI sequence.
+// The shorthand needs the '#', otherwise "196" would be ambiguous with a 256-palette index.
 func parseHex(val string) (string, bool) {
-	hex := strings.TrimPrefix(val, "#")
-	if len(hex) != 6 || !isHex(hex) {
+	hex := val
+	if strings.HasPrefix(val, "#") {
+		hex = val[1:]
+		if len(hex) == 3 {
+			hex = string([]byte{hex[0], hex[0], hex[1], hex[1], hex[2], hex[2]})
+		}
+	}
+	if len(hex) != 6 {
 		return "", false
 	}
 
-	var r, g, b uint8
-	if n, err := fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &b); err == nil && n == 3 {
-		res := []byte("38;2;")
-		res = strconv.AppendUint(res, uint64(r), 10)
-		res = append(res, ';')
-		res = strconv.AppendUint(res, uint64(g), 10)
-		res = append(res, ';')
-		res = strconv.AppendUint(res, uint64(b), 10)
-		return string(res), true
+	red, errRed := strconv.ParseUint(hex[0:2], 16, 8)
+	green, errGreen := strconv.ParseUint(hex[2:4], 16, 8)
+	blue, errBlue := strconv.ParseUint(hex[4:6], 16, 8)
+	if errRed != nil || errGreen != nil || errBlue != nil {
+		return "", false
 	}
 
-	return "", false
+	res := []byte("38;2;")
+	res = strconv.AppendUint(res, red, 10)
+	res = append(res, ';')
+	res = strconv.AppendUint(res, green, 10)
+	res = append(res, ';')
+	res = strconv.AppendUint(res, blue, 10)
+	return string(res), true
 }
 
 // parse256 converts a color ID (0-255) into a 256-color ANSI sequence.
@@ -115,6 +133,7 @@ func parse256(val string) (string, bool) {
 }
 
 // Map evaluates configuration string values and normalizes them into standard ANSI color definitions.
+// Unknown values yield "" (a neutral sequence) so a typo can never inject garbage into the terminal.
 func Map(val string) string {
 	val = strings.TrimSpace(val)
 
@@ -130,5 +149,9 @@ func Map(val string) string {
 		return code
 	}
 
-	return val
+	if isSGR(val) {
+		return val
+	}
+
+	return ""
 }
