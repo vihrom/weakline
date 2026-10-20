@@ -1,3 +1,5 @@
+//go:build darwin || linux || freebsd || openbsd || netbsd
+
 package main
 
 import (
@@ -5,27 +7,17 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"sync"
 )
 
-var (
-	mkdirOnce  sync.Once
-	userTmpDir string
-)
+func cacheFilePath(root string) (string, error) {
+	dir, err := stateDir()
+	if err != nil {
+		return "", err
+	}
 
-// getCacheFilePath returns a secure, unique temporary file path derived from the current directory hash.
-func getCacheFilePath(pwd string) string {
-	mkdirOnce.Do(func() {
-		uid := os.Getuid()
-		userTmpDir = filepath.Join(os.TempDir(), "weakline-"+strconv.Itoa(uid))
-		_ = os.MkdirAll(userTmpDir, 0700)
-	})
-
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(pwd))
-	hashStr := strconv.FormatUint(h.Sum64(), 36)
-
-	return filepath.Join(userTmpDir, "cache_"+hashStr)
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(root))
+	return filepath.Join(dir, "cache_"+strconv.FormatUint(hasher.Sum64(), 36)), nil
 }
 
 
