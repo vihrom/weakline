@@ -1,3 +1,5 @@
+//go:build darwin || linux || freebsd || openbsd || netbsd
+
 package main
 
 import (
@@ -7,7 +9,6 @@ import (
 	"strings"
 )
 
-// writeColored writes text wrapped in ANSI escape codes and Zsh escape sequences directly to the strings.Builder.
 func writeColored(sb *strings.Builder, ansiCode string, text string) {
 	if text == "" {
 		return
@@ -37,7 +38,6 @@ func shortenHome(dir string) string {
 	return dir
 }
 
-// writeFormattedPath colors parent and active directories directly into the strings.Builder.
 func writeFormattedPath(sb *strings.Builder, cfg Config, displayPath string) {
 	if displayPath == "~" || displayPath == "/" {
 		writeColored(sb, cfg.Colors.PathActive, displayPath)
