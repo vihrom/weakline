@@ -20,15 +20,25 @@ import (
 //     returns 0: zsh treats a non-zero trap status as an interrupt.
 const zshInitTemplate = `
 setopt PROMPT_SUBST
+autoload -Uz add-zsh-hook
+
+_weakline_bin=@BIN@
+_weakline_status=0
+
+_weakline_precmd() {
+	_weakline_status=$?
+	"$_weakline_bin" --async $$ </dev/null >/dev/null 2>&1 &!
+}
+precmd_functions=(_weakline_precmd ${precmd_functions:#_weakline_precmd})
 
 TRAPUSR1() {
 	zle && zle reset-prompt
+	return 0
 }
 
-PROMPT='$(weakline $$ $?)'
+PROMPT='$("$_weakline_bin" $_weakline_status)'
 `
 
-// handleInit prints shell integration code if requested.
 func shellQuote(text string) string {
 	return "'" + strings.ReplaceAll(text, "'", `'\''`) + "'"
 }
