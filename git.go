@@ -15,7 +15,10 @@ import (
 	"time"
 )
 
-// Status holds details about the current git repository status.
+const (
+	// waitDelay bounds how long we wait for git's pipes after a timeout kill,
+	// so a grandchild (hook, filter) holding stdout cannot wedge the worker.
+	waitDelay = 100 * time.Millisecond
 type Status struct {
 	Branch    string
 	Staged    int
@@ -177,20 +180,19 @@ func GetStatus(timeout time.Duration) Status {
 			st.Untracked++
 			continue
 		}
+func gitCommand(ctx context.Context, cfg Config, dir string, args ...string) *exec.Cmd {
+	full := []string{"--no-optional-locks"}
+	if !cfg.AllowFSMonitor {
+		full = append(full, "-c", "core.fsmonitor=false")
+	}
+	full = append(full, args...)
 
-		// Handle merge conflict states explicitly to prevent duplicate count
-		if (x == 'D' && y == 'D') || (x == 'A' && y == 'U') || (x == 'U' && y == 'D') ||
-			(x == 'U' && y == 'A') || (x == 'D' && y == 'U') || (x == 'A' && y == 'A') || (x == 'U' && y == 'U') {
-			st.Unstaged++
-			continue
-		}
+	cmd := exec.CommandContext(ctx, "git", full...)
+	cmd.Dir = dir
+	cmd.WaitDelay = waitDelay
+	return cmd
+}
 
-		if x != ' ' && x != '?' {
-			st.Staged++
-		}
-		if y != ' ' && y != '?' {
-			st.Unstaged++
-		}
 	}
 
 	// Handle edge case where git status was completely empty (e.g. detached HEAD without explicit branch line)
