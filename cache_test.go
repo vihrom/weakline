@@ -1,56 +1,129 @@
+//go:build darwin || linux || freebsd || openbsd || netbsd
+
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestGetCacheFilePath(t *testing.T) {
-	pwd1 := "/users/dev/project1"
-	pwd2 := "/users/dev/project2"
+func TestCacheFilePath(t *testing.T) {
+	useStateDir(t)
 
-	path1 := getCacheFilePath(pwd1)
-	path2 := getCacheFilePath(pwd2)
-
-	if path1 == path2 {
-		t.Errorf("expected different cache paths for different working directories, got identical: %q", path1)
+	a1, err := cacheFilePath("/repo/a")
+	if err != nil {
+		t.Fatal(err)
 	}
+	a2, _ := cacheFilePath("/repo/a")
+	b, _ := cacheFilePath("/repo/b")
 
-	if !strings.Contains(filepath.Base(path1), "cache_") {
-		t.Errorf("expected cache filename to start with 'cache_', got %q", filepath.Base(path1))
+	if a1 != a2 {
+		t.Error("cache path is not stable for the same root")
+	}
+	if a1 == b {
+		t.Error("different roots share a cache path")
+	}
+	if !strings.HasPrefix(filepath.Base(a1), "cache_") {
+		t.Errorf("unexpected cache file name %q", filepath.Base(a1))
 	}
 }
 
-func TestWriteAsyncCacheAndAntiFlicker(t *testing.T) {
+func TestWriteAsyncCacheLifecycle(t *testing.T) {
+	useStateDir(t)
 	cfg := DefaultConfig
-	pwd, _ := os.Getwd()
-	cachePath := getCacheFilePath(pwd)
-
-	// Clean up temp test cache file after run
-	defer os.Remove(cachePath)
-
-	stValid := Status{IsGit: true, Branch: "main", Staged: 1}
-	updated := WriteAsyncCache(cfg, stValid)
-	if !updated {
-		t.Errorf("expected WriteAsyncCache to return true on initial write")
+	root := "/repo"
+	path, err := cacheFilePath(root)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	// Verify idempotency (no disk rewrite if output identical)
-	updatedSecond := WriteAsyncCache(cfg, stValid)
-	if updatedSecond {
-		t.Errorf("expected WriteAsyncCache to return false when content hasn't changed")
+	st := Status{IsGit: true, Branch: "main", Staged: 1}
+	if !WriteAsyncCache(cfg, root, st) {
+		t.Fatal("first write must report a change")
+	}
+	if WriteAsyncCache(cfg, root, st) {
+		t.Fatal("identical content must not report a change (anti-flicker)")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(data), "main") {
+		t.Fatalf("cache content = %q, err = %v", data, err)
 	}
 
-	// Verify Anti-Flicker Protection: Timeout error must not overwrite valid existing cache
-	stTimeout := Status{
-		IsGit:     true,
-		IsTimeout: true,
-		Branch:    "Timeout expired! Run git status manually",
+	// A timeout must not keep stale counters: it degrades to branch + marker.
+	slow := Status{IsGit: true, IsTimeout: true, Branch: "main"}
+	if !WriteAsyncCache(cfg, root, slow) {
+		t.Fatal("degrading to the timeout marker must report a change")
 	}
-	updatedTimeout := WriteAsyncCache(cfg, stTimeout)
-	if updatedTimeout {
-		t.Errorf("expected WriteAsyncCache to block timeout error from overwriting existing valid cache")
+	data, _ = os.ReadFile(path)
+	if !strings.Contains(string(data), cfg.IconTimeout) || strings.Contains(string(data), cfg.IconStaged+"1") {
+		t.Errorf("timeout content = %q", data)
+	}
+
+	// A failed status (not a repository anymore) removes the entry.
+	failed := Status{Err: errors.New("fatal: not a git repository")}
+	if !WriteAsyncCache(cfg, root, failed) {
+		t.Fatal("removing the cache must report a change")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("cache file still exists: %v", err)
+	}
+	if WriteAsyncCache(cfg, root, failed) {
+		t.Error("removing a missing cache must not report a change")
+	}
+}
+
+func TestReadCache(t *testing.T) {
+	useStateDir(t)
+	unsetEnv(t, "GIT_DIR")
+
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(repo, "pkg", "deep")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := readCache(sub); got != nil {
+		t.Errorf("readCache before any write = %q, want nil", got)
+	}
+
+	WriteAsyncCache(DefaultConfig, repo, Status{IsGit: true, Branch: "feature"})
+	for _, dir := range []string{repo, sub} {
+		got := readCache(dir)
+		if !strings.Contains(string(got), "feature") {
+			t.Errorf("readCache(%q) = %q, want the repository's cache", dir, got)
+		}
+	}
+
+	if got := readCache(t.TempDir()); got != nil {
+		t.Errorf("readCache outside a repository = %q, want nil", got)
+	}
+	if got := readCache(""); got != nil {
+		t.Errorf("readCache(\"\") = %q, want nil", got)
+	}
+}
+
+func TestReadCacheIgnoresOversizedFile(t *testing.T) {
+	useStateDir(t)
+	unsetEnv(t, "GIT_DIR")
+
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path, err := cacheFilePath(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", maxCacheBytes+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readCache(repo); got != nil {
+		t.Errorf("oversized cache was read (%d bytes)", len(got))
 	}
 }
