@@ -19,8 +19,18 @@ const (
 	// waitDelay bounds how long we wait for git's pipes after a timeout kill,
 	// so a grandchild (hook, filter) holding stdout cannot wedge the worker.
 	waitDelay = 100 * time.Millisecond
+
+	shortOIDLength = 7
+
+	headerOID    = "# branch.oid "
+	headerHead   = "# branch.head "
+	headerAhead  = "# branch.ab "
+	detachedHead = "(detached)"
+)
+
 type Status struct {
 	Branch    string
+	Detached  bool
 	Staged    int
 	Unstaged  int
 	Untracked int
@@ -31,22 +41,6 @@ type Status struct {
 	Err       error
 }
 
-// parseAheadBehind parses the ahead/behind token, e.g., "ahead 1, behind 2] (gone)" or "ahead 1]".
-func parseAheadBehind(token []byte, st *Status) {
-	// Cut trailing metadata at the closing bracket
-	if idxClose := bytes.IndexByte(token, ']'); idxClose != -1 {
-		token = token[:idxClose]
-	}
-
-	// Split multiple metrics by comma (e.g., "ahead 1" and "behind 2")
-	for _, part := range bytes.Split(token, []byte(", ")) {
-		part = bytes.TrimSpace(part)
-		if bytes.HasPrefix(part, []byte("ahead ")) {
-			val, _ := strconv.Atoi(string(part[6:]))
-			st.Ahead = val
-		} else if bytes.HasPrefix(part, []byte("behind ")) {
-			val, _ := strconv.Atoi(string(part[7:]))
-			st.Behind = val
 func ceilingDirs() []string {
 	var dirs []string
 	for _, entry := range strings.Split(os.Getenv("GIT_CEILING_DIRECTORIES"), ":") {
@@ -57,29 +51,11 @@ func ceilingDirs() []string {
 	return dirs
 }
 
-// parseBranchLine extracts the branch name and ahead/behind counters from the header line.
-// Example formats:
-// "## main...origin/main [ahead 1, behind 2]"
-// "## No commits yet on main"
-// "## master"
-func parseBranchLine(line []byte, st *Status) {
-	if !bytes.HasPrefix(line, []byte("## ")) {
-		return
 func findGitRoot(dir string) string {
 	if os.Getenv("GIT_DIR") != "" {
 		return dir
 	}
-	// Skip leading "## "
-	line = line[3:]
 
-	// Handle initial repository states before first commit
-	if bytes.HasPrefix(line, []byte("No commits yet on ")) {
-		st.Branch = string(line[18:])
-		return
-	}
-	if bytes.HasPrefix(line, []byte("Initial commit on ")) {
-		st.Branch = string(line[18:])
-		return
 	ceilings := ceilingDirs()
 	for {
 		if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
@@ -96,90 +72,85 @@ func findGitRoot(dir string) string {
 	}
 }
 
-	// Check if there are ahead/behind tracking metrics
-	idxBracket := bytes.IndexByte(line, '[')
-	if idxBracket != -1 {
-		trackingInfo := line[idxBracket+1:]
-		parseAheadBehind(trackingInfo, st)
-		line = line[:idxBracket]
+func parseAheadBehind(value []byte, st *Status) {
+	for _, field := range bytes.Fields(value) {
+		switch field[0] {
+		case '+':
+			st.Ahead, _ = strconv.Atoi(string(field[1:]))
+		case '-':
+			st.Behind, _ = strconv.Atoi(string(field[1:]))
+		}
 	}
-
-	// Clean up trailing spaces or ellipsis if remote exists
-	line = bytes.TrimSpace(line)
-	if idxEllipsis := bytes.Index(line, []byte("...")); idxEllipsis != -1 {
-		line = line[:idxEllipsis]
-	}
-
-	st.Branch = string(line)
 }
 
-// GetStatus orchestrates repository metadata parsing bound by a global configuration timeout.
-func GetStatus(timeout time.Duration) Status {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "status", "--porcelain=v1", "--branch", "-unormal")
-
-	out, err := cmd.Output()
-
-	if err != nil {
-		// Anti-flicker guard: if Git execution exceeds the timeout deadline,
-		// mark IsTimeout = true so WriteAsyncCache can safely abort without
-		// wiping the existing cache or triggering false prompt redraws.
-		if ctx.Err() == context.DeadlineExceeded {
-			return Status{
-				IsGit:     true,
-				IsTimeout: true,
-				Err:       ctx.Err(),
-			}
+func parseHeader(line []byte, st *Status, oid *string) {
+	switch {
+	case bytes.HasPrefix(line, []byte(headerOID)):
+		*oid = string(line[len(headerOID):])
+	case bytes.HasPrefix(line, []byte(headerHead)):
+		head := string(line[len(headerHead):])
+		if head == detachedHead {
+			st.Detached = true
+		} else {
+			st.Branch = head
 		}
-		// Non-git directory or execution failure (e.g., git not installed, bad flags)
-		return Status{
-			IsGit: false,
-			Err:   err,
-		}
+	case bytes.HasPrefix(line, []byte(headerAhead)):
+		parseAheadBehind(line[len(headerAhead):], st)
 	}
+}
 
+func parseChangedEntry(line []byte, st *Status) {
+	if len(line) < 4 {
+		return
+	}
+	if line[2] != '.' {
+		st.Staged++
+	}
+	if line[3] != '.' {
+		st.Unstaged++
+	}
+}
+
+func parseStatusV2(out []byte) Status {
 	st := Status{IsGit: true}
+	oid := ""
 
-	// Process the raw byte output line by line using bytes.IndexByte.
-	// This approach is completely zero-alloc for loop steps, unlike strings.Split sequences.
 	rem := out
-	isFirstLine := true
-
 	for len(rem) > 0 {
 		var line []byte
-		idx := bytes.IndexByte(rem, '\n')
-		if idx >= 0 {
-			line = rem[:idx]
-			rem = rem[idx+1:]
+		if idx := bytes.IndexByte(rem, '\n'); idx >= 0 {
+			line, rem = rem[:idx], rem[idx+1:]
 		} else {
-			line = rem
-			rem = nil
+			line, rem = rem, nil
 		}
-
 		if len(line) == 0 {
 			continue
 		}
 
-		// The very first line containing "##" holds the branch name and sync statistics
-		if isFirstLine {
-			isFirstLine = false
-			if bytes.HasPrefix(line, []byte("##")) {
-				parseBranchLine(line, &st)
-				continue
-			}
-		}
-
-		if len(line) < 2 {
-			continue
-		}
-
-		x, y := line[0], line[1]
-		if x == '?' && y == '?' {
+		switch line[0] {
+		case '#':
+			parseHeader(line, &st, &oid)
+		case '1', '2':
+			parseChangedEntry(line, &st)
+		case 'u': // unmerged (conflict)
+			st.Unstaged++
+		case '?':
 			st.Untracked++
-			continue
 		}
+	}
+
+	if st.Detached {
+		st.Branch = oid
+		if len(st.Branch) > shortOIDLength {
+			st.Branch = st.Branch[:shortOIDLength]
+		}
+	}
+	if st.Branch == "" {
+		st.Branch = "HEAD"
+	}
+	return st
+}
+
 func gitCommand(ctx context.Context, cfg Config, dir string, args ...string) *exec.Cmd {
 	full := []string{"--no-optional-locks"}
 	if !cfg.AllowFSMonitor {
@@ -193,12 +164,34 @@ func gitCommand(ctx context.Context, cfg Config, dir string, args ...string) *ex
 	return cmd
 }
 
+func quickBranch(cfg Config, dir string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	defer cancel()
+
+	out, err := gitCommand(ctx, cfg, dir, "symbolic-ref", "--short", "-q", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return string(bytes.TrimSpace(out))
+}
+
+func GetStatus(cfg Config, dir string) Status {
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	defer cancel()
+
+	out, err := gitCommand(ctx, cfg, dir, "status", "--porcelain=v2", "--branch", "-unormal").Output()
+	if err == nil {
+		return parseStatusV2(out)
 	}
 
-	// Handle edge case where git status was completely empty (e.g. detached HEAD without explicit branch line)
-	if st.Branch == "" {
-		st.Branch = "HEAD"
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		st := Status{IsGit: true, IsTimeout: true, Branch: quickBranch(cfg, dir)}
+		if st.Branch == "" {
+			st.Branch = "HEAD"
+		}
+		return st
 	}
 
-	return st
+	// Not a repository, git missing, "dubious ownership", corrupted repo, ...
+	return Status{Err: err}
 }
