@@ -1,11 +1,24 @@
+//go:build darwin || linux || freebsd || openbsd || netbsd
+
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+	"strings"
+)
 
-// zshInitScript injects configuration hooks into the active shell environment.
-// PROMPT_SUBST enables dynamic function evaluation inside the prompt string.
-// TRAPUSR1 intercepts signals from background tasks to immediately refresh the visual grid.
-const zshInitScript = `
+// zshInitTemplate injects the shell integration. "@BIN@" is replaced by the
+// shell-quoted absolute path of this executable (no PATH lookup per prompt).
+//
+//   - PROMPT_SUBST lets the prompt string run the renderer.
+//   - precmd runs first and saves the exit status of the last command, so the
+//     status stays correct when the prompt is redrawn later by TRAPUSR1.
+//     It also starts the background git worker once per prompt (not on every
+//     redraw such as a window resize); "&!" detaches it from job control.
+//   - TRAPUSR1 redraws the prompt when the worker reports new data. It always
+//     returns 0: zsh treats a non-zero trap status as an interrupt.
+const zshInitTemplate = `
 setopt PROMPT_SUBST
 
 TRAPUSR1() {
@@ -16,9 +29,21 @@ PROMPT='$(weakline $$ $?)'
 `
 
 // handleInit prints shell integration code if requested.
+func shellQuote(text string) string {
+	return "'" + strings.ReplaceAll(text, "'", `'\''`) + "'"
+}
+
+func zshInitScript(exe string) string {
+	return strings.Replace(zshInitTemplate, "@BIN@", shellQuote(exe), 1)
+}
+
 func handleInit(args []string) bool {
 	if len(args) >= 2 && args[0] == "init" && args[1] == "zsh" {
-		fmt.Print(zshInitScript)
+		exe, err := os.Executable()
+		if err != nil || exe == "" {
+			exe = "weakline"
+		}
+		fmt.Print(zshInitScript(exe))
 		return true
 	}
 	return false
