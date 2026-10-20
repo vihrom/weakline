@@ -1,10 +1,17 @@
+//go:build darwin || linux || freebsd || openbsd || netbsd
+
 package main
 
 import (
 	"bytes"
 	"context"
+	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
