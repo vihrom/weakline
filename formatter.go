@@ -25,7 +25,16 @@ func shortenHome(dir string) string {
 	if home != "" {
 		if trimmed, found := strings.CutPrefix(dir, home); found {
 			return "~" + trimmed
+func promptSafe(text string) string {
+	clean := strings.Map(func(char rune) rune {
+		if char < 0x20 || (char >= 0x7f && char <= 0x9f) {
+			return '?'
 		}
+		return char
+	}, text)
+	return strings.ReplaceAll(clean, "%", "%%")
+}
+
 	}
 	return dir
 }
