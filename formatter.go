@@ -19,12 +19,6 @@ func writeColored(sb *strings.Builder, ansiCode string, text string) {
 	sb.WriteString("%{\x1b[0m%}")
 }
 
-// shortenHome replaces the leading home directory path with a tilde (~).
-func shortenHome(dir string) string {
-	home := os.Getenv("HOME")
-	if home != "" {
-		if trimmed, found := strings.CutPrefix(dir, home); found {
-			return "~" + trimmed
 func promptSafe(text string) string {
 	clean := strings.Map(func(char rune) rune {
 		if char < 0x20 || (char >= 0x7f && char <= 0x9f) {
@@ -35,6 +29,10 @@ func promptSafe(text string) string {
 	return strings.ReplaceAll(clean, "%", "%%")
 }
 
+func shortenHome(dir string) string {
+	home := strings.TrimRight(os.Getenv("HOME"), "/")
+	if home != "" && (dir == home || strings.HasPrefix(dir, home+"/")) {
+		return "~" + dir[len(home):]
 	}
 	return dir
 }
