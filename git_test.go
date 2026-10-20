@@ -188,3 +188,197 @@ func TestGitCommandFlags(t *testing.T) {
 	}
 }
 
+// --- integration tests with a real git ---
+
+func requireGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+}
+
+// isolateGit keeps the user's git configuration and identity out of the tests.
+func isolateGit(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"} {
+		unsetEnv(t, key)
+	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_AUTHOR_NAME", "Test")
+	t.Setenv("GIT_AUTHOR_EMAIL", "test@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "Test")
+	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.com")
+}
+
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// newRepo creates a repository on branch "main" with one commit of a.txt.
+func newRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q")
+	gitIn(t, repo, "symbolic-ref", "HEAD", "refs/heads/main")
+	writeFile(t, filepath.Join(repo, "a.txt"), "a")
+	gitIn(t, repo, "add", "a.txt")
+	gitIn(t, repo, "commit", "-q", "-m", "init")
+	return repo
+}
+
+func TestGetStatusRealRepository(t *testing.T) {
+	requireGit(t)
+	isolateGit(t)
+	repo := newRepo(t)
+
+	writeFile(t, filepath.Join(repo, "a.txt"), "changed") // unstaged
+	writeFile(t, filepath.Join(repo, "b.txt"), "b")       // staged
+	gitIn(t, repo, "add", "b.txt")
+	writeFile(t, filepath.Join(repo, "c.txt"), "c") // untracked
+
+	got := GetStatus(DefaultConfig, repo)
+	want := Status{IsGit: true, Branch: "main", Staged: 1, Unstaged: 1, Untracked: 1}
+	if got != want {
+		t.Errorf("GetStatus() = %+v, want %+v", got, want)
+	}
+}
+
+func TestGetStatusFromSubdirectory(t *testing.T) {
+	requireGit(t)
+	isolateGit(t)
+	repo := newRepo(t)
+	sub := filepath.Join(repo, "pkg")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(repo, "top.txt"), "x") // untracked, outside the subdirectory
+
+	if got := GetStatus(DefaultConfig, sub); got.Untracked != 1 || got.Branch != "main" {
+		t.Errorf("GetStatus() from a subdirectory = %+v", got)
+	}
+}
+
+func TestGetStatusDetachedHead(t *testing.T) {
+	requireGit(t)
+	isolateGit(t)
+	repo := newRepo(t)
+	gitIn(t, repo, "checkout", "-q", "--detach")
+
+	got := GetStatus(DefaultConfig, repo)
+	if !got.Detached || len(got.Branch) != shortOIDLength {
+		t.Errorf("GetStatus() = %+v, want a detached HEAD with a %d-char id", got, shortOIDLength)
+	}
+}
+
+func TestGetStatusNotARepository(t *testing.T) {
+	requireGit(t)
+	isolateGit(t)
+	dir := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+
+	got := GetStatus(DefaultConfig, dir)
+	if got.IsGit || got.Err == nil {
+		t.Errorf("GetStatus() outside a repository = %+v, want IsGit=false and an error", got)
+	}
+}
+
+func TestGetStatusTimeoutKeepsBranchMarker(t *testing.T) {
+	requireGit(t)
+	isolateGit(t)
+	repo := newRepo(t)
+
+	cfg := DefaultConfig
+	cfg.Timeout = time.Nanosecond // always expired
+
+	got := GetStatus(cfg, repo)
+	if !got.IsGit || !got.IsTimeout || got.Err != nil || got.Branch != "HEAD" {
+		t.Errorf("GetStatus() with an expired deadline = %+v", got)
+	}
+}
+
+func TestQuickBranch(t *testing.T) {
+	requireGit(t)
+	isolateGit(t)
+	repo := newRepo(t)
+
+	if got := quickBranch(DefaultConfig, repo); got != "main" {
+		t.Errorf("quickBranch() = %q, want main", got)
+	}
+	gitIn(t, repo, "checkout", "-q", "--detach")
+	if got := quickBranch(DefaultConfig, repo); got != "" {
+		t.Errorf("quickBranch() on a detached HEAD = %q, want empty", got)
+	}
+}
+
+func TestGetStatusRapidChangesAfterAdd(t *testing.T) {
+	requireGit(t)
+	isolateGit(t)
+	repo := newRepo(t)
+
+	for i := 0; i < 5; i++ {
+		fileName := "file" + strconv.Itoa(i) + ".txt"
+		writeFile(t, filepath.Join(repo, fileName), "content")
+		gitIn(t, repo, "add", fileName)
+
+		got := GetStatus(DefaultConfig, repo)
+		if !got.IsGit || got.Err != nil {
+			t.Fatalf("iteration %d: GetStatus failed: %+v", i, got)
+		}
+		if got.Staged != i+1 {
+			t.Errorf("iteration %d: got Staged = %d, want %d", i, got.Staged, i+1)
+		}
+	}
+}
+
+// A repository's own fsmonitor setting must not run when AllowFSMonitor is off.
+func TestRepositoryFSMonitorHookIsNotExecuted(t *testing.T) {
+	requireGit(t)
+	isolateGit(t)
+	repo := newRepo(t)
+
+	marker := filepath.Join(t.TempDir(), "executed")
+	hook := filepath.Join(t.TempDir(), "hook.sh")
+	writeFile(t, hook, "#!/bin/sh\ntouch '"+marker+"'\n")
+	if err := os.Chmod(hook, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, repo, "config", "core.fsmonitor", hook)
+
+	// Sanity check: a plain `git status` does run the repository's hook.
+	plain := exec.Command("git", "status", "--porcelain")
+	plain.Dir = repo
+	_ = plain.Run()
+	if _, err := os.Stat(marker); err != nil {
+		t.Skip("this git version does not run the fsmonitor hook")
+	}
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+
+	GetStatus(DefaultConfig, repo)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the repository's core.fsmonitor command was executed")
+	}
+
+	// With AllowFSMonitor the opt-in works as documented.
+	cfg := DefaultConfig
+	cfg.AllowFSMonitor = true
+	GetStatus(cfg, repo)
+	if _, err := os.Stat(marker); err != nil {
+		t.Error("AllowFSMonitor did not let git run the hook")
+	}
+}
