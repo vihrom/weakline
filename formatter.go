@@ -123,23 +123,16 @@ func writeVenv(sb *strings.Builder, cfg Config) {
 	writeColored(sb, cfg.Colors.Python, "("+cfg.IconPython+promptSafe(venvName(venv))+")")
 }
 
-// Render builds and returns the complete two-line terminal prompt using a single strings.Builder.
-func Render(cfg Config, exitCode int) string {
-	pwd, _ := os.Getwd()
-	displayPath := shortenHome(pwd)
-
+func renderPrompt(cfg Config, exitCode int, pwd string, gitStatus []byte) string {
 	var sb strings.Builder
 	sb.Grow(512)
 
 	sb.WriteString("\n")
 
 	writeColored(&sb, cfg.Colors.PathParent, cfg.IconFolder)
-	writeFormattedPath(&sb, cfg, displayPath)
+	writeFormattedPath(&sb, cfg, shortenHome(pwd))
 	writeVenv(&sb, cfg)
-
-	if cacheData, err := os.ReadFile(getCacheFilePath(pwd)); err == nil {
-		sb.Write(cacheData)
-	}
+	sb.Write(gitStatus)
 
 	sb.WriteString("\n")
 
@@ -151,4 +144,9 @@ func Render(cfg Config, exitCode int) string {
 	sb.WriteString(" ")
 
 	return sb.String()
+}
+
+func Render(cfg Config, exitCode int) string {
+	pwd, _ := os.Getwd()
+	return renderPrompt(cfg, exitCode, pwd, readCache(pwd))
 }
