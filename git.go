@@ -44,8 +44,14 @@ func parseAheadBehind(token []byte, st *Status) {
 		} else if bytes.HasPrefix(part, []byte("behind ")) {
 			val, _ := strconv.Atoi(string(part[7:]))
 			st.Behind = val
+func ceilingDirs() []string {
+	var dirs []string
+	for _, entry := range strings.Split(os.Getenv("GIT_CEILING_DIRECTORIES"), ":") {
+		if filepath.IsAbs(entry) {
+			dirs = append(dirs, filepath.Clean(entry))
 		}
 	}
+	return dirs
 }
 
 // parseBranchLine extracts the branch name and ahead/behind counters from the header line.
@@ -56,6 +62,9 @@ func parseAheadBehind(token []byte, st *Status) {
 func parseBranchLine(line []byte, st *Status) {
 	if !bytes.HasPrefix(line, []byte("## ")) {
 		return
+func findGitRoot(dir string) string {
+	if os.Getenv("GIT_DIR") != "" {
+		return dir
 	}
 	// Skip leading "## "
 	line = line[3:]
@@ -68,7 +77,21 @@ func parseBranchLine(line []byte, st *Status) {
 	if bytes.HasPrefix(line, []byte("Initial commit on ")) {
 		st.Branch = string(line[18:])
 		return
+	ceilings := ceilingDirs()
+	for {
+		if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		if slices.Contains(ceilings, parent) {
+			return ""
+		}
+		dir = parent
 	}
+}
 
 	// Check if there are ahead/behind tracking metrics
 	idxBracket := bytes.IndexByte(line, '[')
