@@ -46,7 +46,7 @@ func writeFormattedPath(sb *strings.Builder, cfg Config, displayPath string) {
 
 	idx := strings.LastIndex(displayPath, "/")
 	if idx == -1 {
-		writeColored(sb, cfg.Colors.PathActive, displayPath)
+		writeColored(sb, cfg.Colors.PathActive, promptSafe(displayPath))
 		return
 	}
 
@@ -58,26 +58,24 @@ func writeFormattedPath(sb *strings.Builder, cfg Config, displayPath string) {
 		active = displayPath[1:] // Anti-double slash guard for root-level folders (e.g. /usr)
 	}
 
-	writeColored(sb, cfg.Colors.PathParent, parents)
-	writeColored(sb, cfg.Colors.PathActive, active)
+	writeColored(sb, cfg.Colors.PathParent, promptSafe(parents))
+	writeColored(sb, cfg.Colors.PathActive, promptSafe(active))
 }
 
-// buildGitStatusString formats individual status indicators into a single styled string.
 func buildGitStatusString(cfg Config, st Status) string {
-	if !st.IsGit || st.IsTimeout || st.Err != nil {
+	if !st.IsGit || st.Err != nil {
 		return ""
 	}
 
 	var sb strings.Builder
 	sb.Grow(128)
 
+	label := promptSafe(st.Branch)
+	if st.Detached {
+		label = cfg.IconDetached + label
+	}
 	sb.WriteString(" ")
-	sb.WriteString("%{\x1b[")
-	sb.WriteString(cfg.Colors.Branch)
-	sb.WriteString("m%}")
-	sb.WriteString(cfg.IconGitBranch)
-	sb.WriteString(st.Branch)
-	sb.WriteString("%{\x1b[0m%}")
+	writeColored(&sb, cfg.Colors.Branch, cfg.IconGitBranch+label)
 
 	statuses := [...]struct {
 		count int
@@ -91,44 +89,38 @@ func buildGitStatusString(cfg Config, st Status) string {
 		{st.Untracked, cfg.Colors.Untracked, cfg.IconUntracked},
 	}
 
-	var buf [32]byte
-
 	for _, s := range statuses {
 		if s.count <= 0 {
 			continue
 		}
-
 		sb.WriteString(" ")
-		sb.WriteString("%{\x1b[")
-		sb.WriteString(s.color)
-		sb.WriteString("m%}")
-		sb.WriteString(s.icon)
+		writeColored(&sb, s.color, s.icon+strconv.Itoa(s.count))
+	}
 
-		res := strconv.AppendInt(buf[:0], int64(s.count), 10)
-		sb.Write(res)
-		sb.WriteString("%{\x1b[0m%}")
+	if st.IsTimeout && cfg.IconTimeout != "" {
+		sb.WriteString(" ")
+		writeColored(&sb, cfg.Colors.Timeout, cfg.IconTimeout)
 	}
 
 	return sb.String()
 }
 
-// writeVenv writes a formatted Python virtual environment segment directly to the builder.
+func venvName(venv string) string {
+	name := filepath.Base(venv)
+	if name == ".venv" || name == "venv" || name == "env" {
+		name = filepath.Base(filepath.Dir(venv))
+	}
+	return name
+}
+
 func writeVenv(sb *strings.Builder, cfg Config) {
 	venv := os.Getenv("VIRTUAL_ENV")
 	if venv == "" {
 		return
 	}
-	envName := filepath.Base(venv)
 
 	sb.WriteString(" ")
-	sb.WriteString("%{\x1b[")
-	sb.WriteString(cfg.Colors.Python)
-	sb.WriteString("m%}")
-	sb.WriteString("(")
-	sb.WriteString(cfg.IconPython)
-	sb.WriteString(envName)
-	sb.WriteString(")")
-	sb.WriteString("%{\x1b[0m%}")
+	writeColored(sb, cfg.Colors.Python, "("+cfg.IconPython+promptSafe(venvName(venv))+")")
 }
 
 // Render builds and returns the complete two-line terminal prompt using a single strings.Builder.
