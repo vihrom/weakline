@@ -5,85 +5,72 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 )
 
-// getLockPath returns a lockfile path isolated inside the user's private directory.
-func getLockPath(pid int) string {
-	uid := os.Getuid()
-	userTmpDir := filepath.Join(os.TempDir(), "weakline-"+strconv.Itoa(uid))
-	_ = os.MkdirAll(userTmpDir, 0700)
-	return filepath.Join(userTmpDir, "lock_"+strconv.Itoa(pid))
+const maxRefreshPasses = 3
+
+func parseArgs(args []string) int {
+	if len(args) == 0 {
+		return 0
+	}
+	exitCode, _ := strconv.Atoi(args[len(args)-1])
+	return exitCode
 }
 
-// handleAsync executes as a detached low-priority thread to compute expensive Git status.
-// It acquires a kernel-level lock to ensure only one worker scans the directory graph per session.
+func refresh(cfg Config, root string) bool {
+	return WriteAsyncCache(cfg, root, GetStatus(cfg, root))
+}
+
 func handleAsync(cfg Config, args []string) bool {
 	if len(args) < 2 || args[0] != "--async" {
 		return false
 	}
 
 	targetPID, err := strconv.Atoi(args[1])
+	if err != nil || targetPID <= 0 {
+		return true
+	}
+
+	pwd, err := os.Getwd()
 	if err != nil {
 		return true
 	}
+	root := findGitRoot(pwd)
+	if root == "" {
+		return true
+	}
 
-	lockPath := getLockPath(targetPID)
-
-	file, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0600)
+	dir, err := stateDir()
 	if err != nil {
 		return true
 	}
-	defer file.Close()
-
-	// Try to hold the lock during execution. Abort if a previous worker is still processing.
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	lock := acquireLock(dir, targetPID, root)
+	if lock == nil {
 		return true
 	}
+	defer lock.Close()
 
-	gitStatus := GetStatus(cfg.Timeout)
-	updated := WriteAsyncCache(cfg, gitStatus)
+	updated := false
+	for pass := 0; pass < maxRefreshPasses; pass++ {
+		if refresh(cfg, root) {
+			updated = true
+		}
+		next := takePending(dir, targetPID)
+		if next == "" {
+			break
+		}
+		root = next
+	}
+	maybeCleanup(dir, time.Now())
 
-	// If metadata changed, notify Zsh shell using cross-process signaling (SIGUSR1)
-	if updated && targetPID > 0 {
+	if updated && os.Getppid() == targetPID {
 		_ = syscall.Kill(targetPID, syscall.SIGUSR1)
 	}
 
 	return true
-}
-
-// parseArgs extracts target shell PID and last exit code from command line arguments.
-func parseArgs(args []string) (int, int) {
-	pid := 0
-	exitCode := 0
-
-	if len(args) > 0 {
-		pid, _ = strconv.Atoi(args[0])
-	}
-	if len(args) > 1 {
-		exitCode, _ = strconv.Atoi(args[1])
-	}
-
-	return pid, exitCode
-}
-
-// spawnAsyncProcess launches weakline in detached background mode to refresh Git status.
-func spawnAsyncProcess(pid int) {
-	exe, err := os.Executable()
-	if err != nil {
-		return
-	}
-
-	cmd := exec.Command(exe, "--async", strconv.Itoa(pid))
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-
-	_ = cmd.Start()
 }
 
 func main() {
@@ -95,17 +82,13 @@ func main() {
 
 	cfg := DefaultConfig
 
+	if handleDiagnose(cfg, args) {
+		return
+	}
+
 	if handleAsync(cfg, args) {
 		return
 	}
 
-	pid, exitCode := parseArgs(args)
-
-	// Render prompt instantly from fast fallback memory/cache
-	fmt.Print(Render(cfg, exitCode))
-
-	// Offload Git lookup computations to a detached child process
-	if pid > 0 {
-		spawnAsyncProcess(pid)
-	}
+	fmt.Print(Render(cfg, parseArgs(args)))
 }
