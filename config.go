@@ -54,10 +54,10 @@ type Config struct {
 }
 
 var DefaultConfig = Config{
-	Timeout:        500 * time.Millisecond,
+	Timeout:        5 * time.Second,
 	AllowFSMonitor: false,
 
-	IconPrompt:    "$",
+	IconPrompt:    "❯",
 	IconFolder:    "",
 	IconGitBranch: "\ue702 ",
 	IconDetached:  "@",
@@ -71,7 +71,7 @@ var DefaultConfig = Config{
 	Colors: Colors{
 		PathParent: Map("cyan"),
 		PathActive: Map("bold_cyan"),
-		Branch:     Map("#babdbf"),
+		Branch:     Map("blue"),
 		Staged:     Map("green"),
 		Unstaged:   Map("red"),
 		Untracked:  Map("yellow"),
@@ -79,7 +79,7 @@ var DefaultConfig = Config{
 		Behind:     Map("yellow"),
 		Timeout:    Map("gray"),
 		Python:     Map("green"),
-		PromptOK:   Map("red"),
+		PromptOK:   Map("blue"),
 		PromptErr:  Map("bold_red"),
 	},
 }
